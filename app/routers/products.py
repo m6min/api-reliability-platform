@@ -1,64 +1,65 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.product import Product
+from app.repositories.product_repository import (
+    get_all_products,
+    get_product_by_id,
+)
 from app.schemas.product import ProductCreate, ProductRead, ProductUpdate
+from app.services.product_service import (
+    create_product as create_product_service,
+)
+from app.services.product_service import (
+    delete_product as delete_product_service,
+)
+from app.services.product_service import (
+    update_product as update_product_service,
+)
 
 router = APIRouter()
 
-@router.get("/", response_model=list[ProductRead], summary="Get all products from database in a list")
+@router.get("/", response_model=list[ProductRead],
+            summary="Get all products from database in a list")
 async def get_products(db: Annotated[AsyncSession, Depends(get_db)]) -> list[Product]:
-    stmt = select(Product)
-    results = await db.execute(stmt)
-    products = results.scalars().all()
-    return list(products)
+    return await get_all_products(db)
 
-@router.post("/", response_model=ProductRead, status_code=status.HTTP_201_CREATED, summary="Create a new product into database")
+@router.post("/", response_model=ProductRead,
+            status_code=status.HTTP_201_CREATED, summary="Create a new product into database")
 async def create_product(product_data: ProductCreate, db: Annotated[AsyncSession, Depends(get_db)]):
-    """Create a 'Product' object on database"""
-    product = Product(**product_data.model_dump())
-    db.add(product)
-    await db.commit()
-    await db.refresh(product)
-    return product
+    return await create_product_service(db, product_data)
 
 @router.get("/{product_id}", response_model=ProductRead)
 async def get_product(product_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> Product:
-    """Get a 'Product' object from database with an id of integer"""
-    stmt = select(Product).where(
-        Product.id == product_id)
-    result = await db.execute(stmt)
-    product = result.scalar_one_or_none()
-    if product is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No matched product for id of {product_id}")
-    return product
-
-@router.put("/{product_id}", response_model=ProductRead, summary="Update a product with id")
-async def update_product(product_id: int, product_data: ProductUpdate, db: Annotated[AsyncSession, Depends(get_db)]) -> Product:
-    stmt = select(Product).where(
-        Product.id == product_id
-    )
-    result = await db.execute(stmt)
-    product = result.scalar_one_or_none()
+    product = await get_product_by_id(db, product_id)
     if product is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"No matched product for id of {product_id}")
-    update_data = product_data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(product, key, value)
-    await db.commit()
-    await db.refresh(product)
     return product
 
-@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete your product with id")
+@router.put("/{product_id}",
+            response_model=ProductRead, summary="Update a product with id")
+async def update_product(product_id: int, product_data: ProductUpdate, db: Annotated[AsyncSession, Depends(get_db)]) -> Product:
+    product = await update_product_service(
+        db=db,
+        product_id=product_id,
+        product_data=product_data,
+    )
+
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No matched product for id of {product_id}",
+        )
+
+    return product
+
+@router.delete("/{product_id}",
+            status_code=status.HTTP_204_NO_CONTENT, summary="Delete your product with id")
 async def delete_product(product_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> None:
-    stmt = delete(Product).where(
-            Product.id == product_id)
-    result = await db.execute(stmt)
-    if result.rowcount == 0: # type: ignore
+    result = await delete_product_service(db=db, product_id=product_id)
+    if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No matched product for id of {product_id}")
-    await db.commit()
